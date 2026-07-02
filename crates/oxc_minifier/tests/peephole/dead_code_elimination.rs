@@ -711,3 +711,21 @@ fn dce_keeps_write_only_property_assignments() {
         "(function() {\n\tvar r = require(\"react\");\n\tvar o = function(e, t) {\n\t\treturn r.create(e, t);\n\t};\n\to.displayName = \"X\";\n})();",
     );
 }
+
+// Drop dead trailing arguments to functions that ignore them (#23866). The
+// recorder runs in DCE mode too, so the drop applies there as well.
+#[test]
+fn dce_drop_dead_args() {
+    test(
+        "const foo = (u) => { bar() }; foo(1); foo(2)",
+        "const foo = (u) => { bar() }; foo(); foo()",
+    );
+}
+
+#[test]
+fn dce_drop_dead_args_issue_repro() {
+    test(
+        "const foo = async (assets) => ({}); export default await foo({ bar: 'baz' })",
+        "const foo = async (assets) => ({}); export default await foo()",
+    );
+}
