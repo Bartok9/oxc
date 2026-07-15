@@ -87,6 +87,20 @@ impl<'a> PeepholeOptimizations {
         if body_unsafe || ctx.current_scope_id() != body_scope {
             return false;
         }
+        // The declarator must also execute unconditionally with the body: a
+        // brace-less `if (c) var x = v;` — single-statement block flattening
+        // produces these from `if (c) { var x = v }` — carries no block
+        // scope, so the scope check above cannot see the conditionality and
+        // the hoisted binding would inline a value it only conditionally
+        // holds (#24531). Accept only statement-list positions.
+        for ancestor in ctx.ancestors() {
+            match ancestor {
+                Ancestor::VariableDeclarationDeclarations(_)
+                | Ancestor::ExportNamedDeclarationDeclaration(_) => {}
+                Ancestor::ProgramBody(_) | Ancestor::FunctionBodyStatements(_) => break,
+                _ => return false,
+            }
+        }
         // At least one read, and every read crosses a function boundary.
         let mut reads = ctx.scoping().get_resolved_references(symbol_id).filter(|r| r.is_read());
         let Some(first) = reads.next() else { return false };
