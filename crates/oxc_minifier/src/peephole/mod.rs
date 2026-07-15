@@ -486,7 +486,12 @@ impl<'a> Traverse<'a> for PeepholeOptimizations {
         stmts: &mut ArenaVec<'a, Statement<'a>>,
         ctx: &mut TraverseCtx<'a>,
     ) {
+        // See `MinifierState::reprocessing_statements`: everything reached
+        // from here re-processes already-traversed statements, so the
+        // traversal-order proof carried by `symbol_values` entries is off.
+        ctx.state.reprocessing_statements = true;
         Self::minimize_statements(stmts, ctx);
+        ctx.state.reprocessing_statements = false;
     }
 
     fn enter_statement(&mut self, stmt: &mut Statement<'a>, ctx: &mut TraverseCtx<'a>) {

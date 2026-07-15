@@ -2,7 +2,7 @@ use crate::generated::ancestor::Ancestor;
 use oxc_ast::ast::*;
 use oxc_ecmascript::constant_evaluation::{ConstantEvaluation, ConstantValue};
 use oxc_span::GetSpan;
-use oxc_syntax::symbol::SymbolId;
+use oxc_syntax::{scope::ScopeId, symbol::SymbolId};
 
 use crate::TraverseCtx;
 use crate::symbol_value::FreshValueKind;
@@ -34,7 +34,46 @@ impl<'a> PeepholeOptimizations {
             decl.init.as_ref().map_or(Some(ConstantValue::Undefined), |_| init_constant)
         };
         let kind = decl.init.as_ref().map_or(FreshValueKind::None, Self::fresh_value_kind);
-        ctx.init_value(symbol_id, value, kind, falsy_init, decl.init.is_none());
+        let constructor_init_body_scope = Self::constructible_init_body_scope(decl, symbol_id, ctx);
+        ctx.init_value(
+            symbol_id,
+            value,
+            kind,
+            falsy_init,
+            decl.init.is_none(),
+            constructor_init_body_scope,
+        );
+    }
+
+    /// The record-side conditions for `SymbolValue::constructor_init_body_scope`:
+    /// the declarator sits directly at the enclosing function-body/program
+    /// scope (not inside a block, for-init, or case list — so reaching any
+    /// later in-order position in that body implies the declarator executed),
+    /// outside script top level (another script can reassign a top-level
+    /// `var`), with no redeclarations (a redeclaration's initializer is not a
+    /// write reference, so it is invisible to `init_value`'s write-once gate),
+    /// and its initializer — through parens — is a constructible value whose
+    /// `prototype` read is trap-free: a class expression, or a plain
+    /// (non-async, non-generator) function expression.
+    fn constructible_init_body_scope(
+        decl: &VariableDeclarator<'a>,
+        symbol_id: SymbolId,
+        ctx: &TraverseCtx<'a>,
+    ) -> Option<ScopeId> {
+        let &(body_scope, _) = ctx.state.body_unsafe_stack.last();
+        if ctx.current_scope_id() != body_scope
+            || Self::is_for_statement_init(ctx)
+            || Self::keep_top_level_var_in_script_mode(ctx)
+            || !ctx.scoping().symbol_redeclarations(symbol_id).is_empty()
+        {
+            return None;
+        }
+        let constructible = match decl.init.as_ref().map(Expression::get_inner_expression) {
+            Some(Expression::ClassExpression(_)) => true,
+            Some(Expression::FunctionExpression(f)) => !f.r#async && !f.generator,
+            _ => false,
+        };
+        constructible.then_some(body_scope)
     }
 
     /// A `ConstantValue` that coerces to `false` (`false`, `0`/`-0`/`NaN`, `""`,
@@ -206,7 +245,7 @@ impl<'a> PeepholeOptimizations {
     ) {
         let Some(id) = id else { return };
         let Some(symbol_id) = id.symbol_id.get() else { return };
-        ctx.init_value(symbol_id, None, FreshValueKind::Function, false, false);
+        ctx.init_value(symbol_id, None, FreshValueKind::Function, false, false, None);
     }
 
     /// Initialize symbol value for class declarations.
@@ -220,7 +259,7 @@ impl<'a> PeepholeOptimizations {
         } else {
             FreshValueKind::Class
         };
-        ctx.init_value(symbol_id, None, kind, false, false);
+        ctx.init_value(symbol_id, None, kind, false, false, None);
     }
 
     fn is_for_statement_init(ctx: &TraverseCtx<'a>) -> bool {

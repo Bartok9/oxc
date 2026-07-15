@@ -92,6 +92,18 @@ pub struct MinifierState<'a> {
     /// `init_symbol_value`.
     pub body_unsafe_stack: NonEmptyStack<(ScopeId, bool)>,
 
+    /// True while `exit_statements` re-processes a statement list through
+    /// `minimize_statements`. Entries in `symbol_values` are recorded by the
+    /// in-order walk, so their presence normally proves "this declarator was
+    /// traversed — and therefore executes — before the current position".
+    /// During list-level re-processing the whole list has already been
+    /// traversed, so entries for declarators *after* the statement being
+    /// re-processed are present too and that order proof is invalid.
+    /// Order-dependent consumers (`heritage_may_be_uninitialized`) must stay
+    /// conservative while this is set; the fixed-point loop re-runs them at
+    /// an in-order position on the next pass.
+    pub reprocessing_statements: bool,
+
     /// Set when a typed helper mutates the AST. Private by design: the only
     /// writers are the helpers on `MinifierTraverseCtx`; the only reader is
     /// the fixed-point loop driver via `take_mutated()`.
@@ -125,6 +137,7 @@ impl<'a> MinifierState<'a> {
             class_symbols_stack: ClassSymbolsStack::new(),
             symbol_facts: PersistentSymbolFacts::default(),
             body_unsafe_stack: NonEmptyStack::new((scoping.root_scope_id(), false)),
+            reprocessing_statements: false,
             mutated: false,
             dirty: PassDirty::new(scoping.references_len(), allocator),
             concat_scratch: String::new(),

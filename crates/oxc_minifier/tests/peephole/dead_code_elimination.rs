@@ -771,3 +771,50 @@ fn dce_remove_unreachable_after_terminating_statement() {
         "export function f(c) {\n\t{\n\t\tif (c) return g();\n\t\tfunction g() {\n\t\t\treturn 1;\n\t\t}\n\t}\n\treturn tail();\n}",
     );
 }
+
+#[test]
+fn dce_unused_class_with_provably_initialized_heritage() {
+    // https://github.com/rolldown/rolldown/pull/10274 — bundled-chunk shape:
+    // an unused subclass extending a `var` that was initialized with a class
+    // expression earlier in the same straight-line top level. The heritage
+    // read is provably a constructor by the time the class evaluates, so the
+    // whole class is removable.
+    test(
+        "var Base = class {};\nvar Keep = class extends Base {};\nvar REMOVE = class extends Base {};\nnew Keep();",
+        "var Base = class {};\nvar Keep = class extends Base {};\nnew Keep();",
+    );
+    // Same proof for a bare expression statement.
+    test(
+        "var Base = class {};\n(class extends Base {});\nuse(Base);",
+        "var Base = class {};\nuse(Base);",
+    );
+    // Removing the class makes the heritage binding itself unused.
+    test("var Base = class {};\n(class extends Base {});", "");
+    // Lexical bindings initialize at their declaration statement, same proof.
+    test("let Base = class {};\n(class extends Base {});", "");
+    // A plain function expression is constructible and its `prototype` is a
+    // plain data property.
+    test("var f = function() {};\n(class extends f {});", "");
+
+    // Negative: reading the binding before its initializer executes is a
+    // guaranteed TypeError (`extends undefined`) that must survive.
+    test_same("(class extends Base {});\nvar Base = class {};");
+    // Negative: a later lexical declaration is in its TDZ — ReferenceError.
+    test_same("(class extends Base {});\nlet Base = class {};");
+    // Negative: reassignment can replace the constructor before evaluation.
+    test_same("var Base = class {};\nBase = 0;\n(class extends Base {});");
+    // Negative: a `var` redeclaration's initializer is not a write reference;
+    // on the second loop iteration the heritage is `0`.
+    test_same(
+        "var Base = class {};\ndo {\n\t(class extends Base {});\n\tvar Base = 0;\n} while (g());",
+    );
+    // Negative: inside a nested function the evaluation order is not tied to
+    // source order — `foo()` runs before `Base` is assigned.
+    test_same("foo();\nvar Base = class {};\nfunction foo() {\n\t(class extends Base {});\n}");
+    // Negative: generator and async functions are not constructible —
+    // `extends` throws even though the binding is initialized.
+    test_same("var f = function* () {};\n(class extends f {});");
+    test_same("var f = async function() {};\n(class extends f {});");
+    // Negative: an arrow initializer is not constructible.
+    test_same("var f = () => {};\n(class extends f {});");
+}

@@ -384,15 +384,34 @@ fn keep_class_with_tdz_or_undefined_heritage() {
     test_same_smallest("g(function() {\n\tclass C extends C {}\n});");
     // The wrapped variant classifies through the same heritage unwrap.
     test_smallest("class C extends (0, C) {}", "class C extends C {}");
-    // A forward lexical heritage also evaluates in its TDZ; reference order
-    // cannot be proven mid-minification (transforms copy and move spans), so
-    // any class/lexical/`var` heritage keeps the class.
+    // A forward lexical heritage also evaluates in its TDZ. The in-order
+    // initialization proof (see `heritage_may_be_uninitialized`) only clears
+    // bindings whose initializing declarator was already traversed, so a
+    // forward reference keeps the class.
     test_same_smallest(
         "class A extends B {\n\tm() {\n\t\tnew A();\n\t}\n}\nclass B {\n\tm() {\n\t\tnew A();\n\t}\n}",
     );
-    // `var` heritage: a hoisted-but-unassigned binding is `undefined`, and
-    // `extends undefined` is a TypeError.
+    // `var` heritage initialized on an earlier line: the straight-line proof
+    // clears the heritage, but the `new A()` self-reference keeps the class
+    // itself alive (self-referential classes are not removed).
     test_same_smallest("var B = class {};\nclass A extends B {\n\tm() {\n\t\tnew A();\n\t}\n}");
+}
+
+#[test]
+fn remove_unused_class_with_provably_initialized_heritage() {
+    // A `var` heritage initialized with a class expression by an earlier
+    // statement of the same function body is provably a constructor when the
+    // class evaluates (write-once, no redeclarations), so the unused class is
+    // removable — and with it the heritage binding itself.
+    // https://github.com/rolldown/rolldown/pull/10274
+    test_smallest("var B = class {};\nclass A extends B {\n\tm() {}\n}", "");
+    // The unused-declarator path through `minimize_statements` converges over
+    // the fixed-point loop: the extracted `(class extends B {})` statement is
+    // removed by the next in-order pass.
+    test_smallest(
+        "var B = class {};\nvar REMOVE = class extends B {};\nnew B();\nnew B();",
+        "var B = class {};\nnew B(), new B();",
+    );
 }
 
 #[test]

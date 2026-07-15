@@ -11,7 +11,6 @@ use oxc_ecmascript::{
     ToPrimitive,
     side_effects::{MayHaveSideEffects, MayHaveSideEffectsContext},
 };
-use oxc_semantic::Scoping;
 use oxc_span::GetSpan;
 use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 
@@ -1016,7 +1015,7 @@ impl<'a> PeepholeOptimizations {
         c: &mut Class<'a>,
         ctx: &mut TraverseCtx<'a>,
     ) -> Option<ArenaVec<'a, Expression<'a>>> {
-        match Self::classify_class_removability(c, &*ctx, ctx.scoping()) {
+        match Self::classify_class_removability(c, ctx) {
             ClassRemovability::Keep => return None,
             // Nothing to extract by construction: `RemovesClean` means pure
             // heritage, no present static values, pure computed keys — so
@@ -1082,8 +1081,7 @@ impl<'a> PeepholeOptimizations {
     /// `remove_unused_class` keys off it.
     pub(crate) fn classify_class_removability(
         c: &Class<'a>,
-        ctx: &impl MayHaveSideEffectsContext<'a>,
-        scoping: &Scoping,
+        ctx: &TraverseCtx<'a>,
     ) -> ClassRemovability {
         // Don't remove classes with decorators - they may have side effects.
         if !c.decorators.is_empty() {
@@ -1102,7 +1100,7 @@ impl<'a> PeepholeOptimizations {
                 // TypeError `class C extends (() => {}) {}`.
                 Expression::ArrowFunctionExpression(_) => return ClassRemovability::Keep,
                 Expression::Identifier(ident)
-                    if Self::heritage_may_be_uninitialized(ident, scoping) =>
+                    if Self::heritage_may_be_uninitialized(ident, ctx) =>
                 {
                     return ClassRemovability::Keep;
                 }
@@ -1155,22 +1153,50 @@ impl<'a> PeepholeOptimizations {
     /// declared later are in their TDZ (ReferenceError — test262
     /// class/name-binding/in-extends-expression.js), and a
     /// hoisted-but-unassigned `var` or missing parameter evaluates to
-    /// `undefined` (TypeError: not a constructor). Reference order cannot be
-    /// proven mid-minification (transforms copy and move spans), so any
-    /// heritage resolving to a class, lexical, or `var` binding is
-    /// conservatively unremovable. Hoisted plain function declarations and
-    /// import bindings are initialized before evaluation and stay removable;
-    /// unresolved identifiers keep flowing through the global side-effect
-    /// machinery. The deeper fix — modeling potentially-uninitialized
-    /// identifier reads — belongs in `oxc_ecmascript`'s side-effect layer,
-    /// which currently treats every resolved identifier read as pure.
-    fn heritage_may_be_uninitialized(ident: &IdentifierReference<'_>, scoping: &Scoping) -> bool {
+    /// `undefined` (TypeError: not a constructor). Any heritage resolving to
+    /// a class, lexical, or `var` binding is therefore unremovable — unless
+    /// the straight-line initialization proof below applies. Hoisted plain
+    /// function declarations and import bindings are initialized before
+    /// evaluation and stay removable; unresolved identifiers keep flowing
+    /// through the global side-effect machinery.
+    ///
+    /// The proof (`SymbolValue::constructor_init_body_scope`): the binding
+    /// was initialized with a constructible value by a write-once,
+    /// redeclaration-free declarator sitting directly at an enclosing
+    /// function-body scope, and that declarator was already traversed this
+    /// pass — with `symbol_values` reset every pass and recorded in-order,
+    /// presence implies the declarator precedes this class in source order.
+    /// Source order implies execution order only within the same
+    /// straight-line body: a position inside a nested function can run at
+    /// any time relative to the declarator (`read_crosses_function_boundary`
+    /// guards this), and a statement-list re-process runs after the whole
+    /// list was traversed (`reprocessing_statements` guards that; the
+    /// fixed-point loop retries in order next pass). Spans are never
+    /// consulted — transforms copy and move them.
+    fn heritage_may_be_uninitialized(
+        ident: &IdentifierReference<'_>,
+        ctx: &TraverseCtx<'a>,
+    ) -> bool {
         const UNINIT_RISK: SymbolFlags = SymbolFlags::Variable.union(SymbolFlags::Class);
-        ident
+        let scoping = ctx.scoping();
+        let Some(symbol_id) = ident
             .reference_id
             .get()
             .and_then(|reference_id| scoping.get_reference(reference_id).symbol_id())
-            .is_some_and(|symbol_id| scoping.symbol_flags(symbol_id).intersects(UNINIT_RISK))
+        else {
+            return false;
+        };
+        if !scoping.symbol_flags(symbol_id).intersects(UNINIT_RISK) {
+            return false;
+        }
+        if !ctx.state.reprocessing_statements
+            && let Some(value) = ctx.state.symbol_values.get_symbol_value(symbol_id)
+            && let Some(body_scope) = value.constructor_init_body_scope
+            && !Self::read_crosses_function_boundary(ctx.current_scope_id(), body_scope, ctx)
+        {
+            return false;
+        }
+        true
     }
 
     /// Expression kinds the `remove_unused_expression` dispatch above sends

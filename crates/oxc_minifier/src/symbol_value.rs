@@ -1,6 +1,6 @@
 use oxc_ecmascript::constant_evaluation::ConstantValue;
 use oxc_index::IndexVec;
-use oxc_syntax::symbol::SymbolId;
+use oxc_syntax::{scope::ScopeId, symbol::SymbolId};
 
 /// The kind of fresh value a binding was initialized with, or `None` when the
 /// value may alias another binding (or is untracked).
@@ -58,6 +58,20 @@ pub struct SymbolValue<'a> {
     /// declarations and variable declarations initialized with
     /// object/array/function/class literals. See `FreshValueKind`.
     pub kind: FreshValueKind,
+
+    /// The function-body (or program) scope whose straight-line statement flow
+    /// initialized this binding with a constructible value. Set when the
+    /// declarator sits directly at that scope, the initializer is a class
+    /// expression or a plain (non-async, non-generator) function expression,
+    /// and the binding is write-once with no redeclarations (see
+    /// `constructible_init_body_scope` for the record-side conditions and
+    /// `init_value` for the write-once / direct-eval gates). Because entries
+    /// are recorded in traversal order and reset every pass, a set value also
+    /// proves the declarator precedes the current in-order position — so a
+    /// later `class … extends <this binding>` in the same body cannot observe
+    /// an uninitialized or non-constructor value, and
+    /// `heritage_may_be_uninitialized` clears such classes for removal.
+    pub constructor_init_body_scope: Option<ScopeId>,
 
     /// The symbol is provably falsy in **boolean context** but not necessarily
     /// foldable in value context. Set for a write-once binding with a falsy

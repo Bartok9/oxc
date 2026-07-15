@@ -13,7 +13,10 @@ use oxc_ecmascript::{
 };
 use oxc_semantic::{IsGlobalReference, SymbolId};
 use oxc_str::format_str;
-use oxc_syntax::{reference::ReferenceId, scope::ScopeFlags};
+use oxc_syntax::{
+    reference::ReferenceId,
+    scope::{ScopeFlags, ScopeId},
+};
 
 use crate::{
     generated::ancestor::Ancestor,
@@ -247,6 +250,7 @@ impl<'a> TraverseCtx<'a, MinifierState<'a>> {
         kind: FreshValueKind,
         falsy_init: bool,
         init_absent: bool,
+        constructor_init_body_scope: Option<ScopeId>,
     ) {
         let mut exported = false;
         if self.scoping.current_scope_id() == self.scoping().root_scope_id() {
@@ -299,6 +303,14 @@ impl<'a> TraverseCtx<'a, MinifierState<'a>> {
         let implicit_undefined =
             init_absent && initialized_constant.as_ref().is_some_and(ConstantValue::is_undefined);
 
+        // The straight-line initialization proof (see
+        // `SymbolValue::constructor_init_body_scope`) additionally needs the
+        // binding to be write-once and invisible to direct eval; both are
+        // whole-program facts already computed here.
+        let constructor_init_body_scope = constructor_init_body_scope.filter(|_| {
+            write_references_count == 0 && !scope_flags.contains(ScopeFlags::DirectEval)
+        });
+
         let symbol_value = SymbolValue {
             initialized_constant,
             implicit_undefined,
@@ -307,6 +319,7 @@ impl<'a> TraverseCtx<'a, MinifierState<'a>> {
             write_references_count,
             member_write_target_read_count,
             kind,
+            constructor_init_body_scope,
             boolean_falsy,
         };
         self.state.symbol_values.init_value(symbol_id, symbol_value);
