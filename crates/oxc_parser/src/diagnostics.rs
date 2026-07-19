@@ -33,6 +33,65 @@ where
     OxcDiagnostic::error(message).with_error_code("TS", code)
 }
 
+/// A parser diagnostic whose construction is deferred.
+///
+/// The parser sets and discards a fatal error on every speculative parse it rewinds
+/// (arrow-function lookahead, TS type-argument ambiguity). Eagerly building the
+/// `OxcDiagnostic` there means allocating `format!` strings that are immediately
+/// thrown away. These variants instead capture only the (`Copy`) data needed to build
+/// the diagnostic; [`DeferredDiagnostic::into_diagnostic`] formats it at the parse
+/// boundary, in the rare case the fatal error actually surfaces.
+#[derive(Debug, Clone, Copy)]
+pub enum DeferredDiagnostic {
+    /// [`expect_token`]
+    ExpectToken { expected: &'static str, actual: &'static str, span: Span },
+    /// [`expect_closing`]
+    ExpectClosing { closing: &'static str, actual: &'static str, span: Span, opening_span: Span },
+    /// [`expect_closing_or_separator`]
+    ExpectClosingOrSeparator {
+        closing: &'static str,
+        separator: &'static str,
+        actual: &'static str,
+        span: Span,
+        opening_span: Span,
+    },
+    /// [`unexpected_token`]
+    UnexpectedToken { span: Span },
+}
+
+impl DeferredDiagnostic {
+    /// Build the `OxcDiagnostic`. Cold: only called for a fatal error that survives to
+    /// the parse boundary (speculative parses discard the deferred value without building).
+    #[cold]
+    pub fn into_diagnostic(self) -> OxcDiagnostic {
+        match self {
+            Self::ExpectToken { expected, actual, span } => {
+                OxcDiagnostic::error(format!("Expected `{expected}` but found `{actual}`"))
+                    .with_label(span.label(format!("`{expected}` expected")))
+            }
+            Self::ExpectClosing { closing, actual, span, opening_span } => {
+                OxcDiagnostic::error(format!("Expected `{closing}` but found `{actual}`"))
+                    .with_labels([
+                        span.primary_label(format!("`{closing}` expected")),
+                        opening_span.label("Opened here"),
+                    ])
+            }
+            Self::ExpectClosingOrSeparator { closing, separator, actual, span, opening_span } => {
+                OxcDiagnostic::error(format!(
+                    "Expected `{separator}` or `{closing}` but found `{actual}`"
+                ))
+                .with_labels([
+                    span.primary_label(format!("`{separator}` or `{closing}` expected")),
+                    opening_span.label("Opened here"),
+                ])
+            }
+            Self::UnexpectedToken { span } => {
+                OxcDiagnostic::error("Unexpected token").with_label(span)
+            }
+        }
+    }
+}
+
 #[cold]
 pub fn redeclaration(x0: &str, declare_span: Span, redeclare_span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!("Identifier `{x0}` has already been declared")).with_labels([
@@ -56,9 +115,8 @@ pub fn flow(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("Flow is not supported").with_label(span)
 }
 
-#[cold]
-pub fn unexpected_token(span: Span) -> OxcDiagnostic {
-    OxcDiagnostic::error("Unexpected token").with_label(span)
+pub fn unexpected_token(span: Span) -> DeferredDiagnostic {
+    DeferredDiagnostic::UnexpectedToken { span }
 }
 
 /// 'abstract' modifier can only appear on a class, method, or property declaration. (1242)
@@ -131,42 +189,31 @@ pub fn jsx_in_non_jsx(span: Span) -> OxcDiagnostic {
         .with_help("JSX syntax is disabled and should be enabled via the parser options")
 }
 
-#[cold]
-pub fn expect_token(x0: &str, x1: &str, span: Span) -> OxcDiagnostic {
-    OxcDiagnostic::error(format!("Expected `{x0}` but found `{x1}`"))
-        .with_label(span.label(format!("`{x0}` expected")))
+pub fn expect_token(
+    expected: &'static str,
+    actual: &'static str,
+    span: Span,
+) -> DeferredDiagnostic {
+    DeferredDiagnostic::ExpectToken { expected, actual, span }
 }
 
-#[cold]
 pub fn expect_closing(
-    expected_closing: &str,
-    actual: &str,
+    closing: &'static str,
+    actual: &'static str,
     span: Span,
     opening_span: Span,
-) -> OxcDiagnostic {
-    OxcDiagnostic::error(format!("Expected `{expected_closing}` but found `{actual}`")).with_labels(
-        [
-            span.primary_label(format!("`{expected_closing}` expected")),
-            opening_span.label("Opened here"),
-        ],
-    )
+) -> DeferredDiagnostic {
+    DeferredDiagnostic::ExpectClosing { closing, actual, span, opening_span }
 }
 
-#[cold]
 pub fn expect_closing_or_separator(
-    expected_closing: &str,
-    expected_separator: &str,
-    actual: &str,
+    closing: &'static str,
+    separator: &'static str,
+    actual: &'static str,
     span: Span,
     opening_span: Span,
-) -> OxcDiagnostic {
-    OxcDiagnostic::error(format!(
-        "Expected `{expected_separator}` or `{expected_closing}` but found `{actual}`"
-    ))
-    .with_labels([
-        span.primary_label(format!("`{expected_separator}` or `{expected_closing}` expected")),
-        opening_span.label("Opened here"),
-    ])
+) -> DeferredDiagnostic {
+    DeferredDiagnostic::ExpectClosingOrSeparator { closing, separator, actual, span, opening_span }
 }
 
 #[cold]

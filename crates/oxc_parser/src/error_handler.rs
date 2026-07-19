@@ -4,15 +4,51 @@ use oxc_allocator::{Dummy, GetAllocator};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::Span;
 
-use crate::{ParserConfig as Config, ParserImpl, diagnostics, lexer::Kind};
+use crate::{
+    ParserConfig as Config, ParserImpl, diagnostics, diagnostics::DeferredDiagnostic, lexer::Kind,
+};
 
 /// Fatal parsing error.
 #[derive(Debug, Clone)]
 pub struct FatalError {
-    /// The fatal error
-    pub error: OxcDiagnostic,
+    /// The fatal error, possibly deferred.
+    pub error: FatalErrorPayload,
     /// Length of `errors` at time fatal error is recorded
     pub errors_len: usize,
+}
+
+/// The payload of a [`FatalError`]: either an already-built diagnostic or a deferred one.
+///
+/// Speculative parses (arrow lookahead, TS type-argument ambiguity) set a fatal error
+/// and then rewind, discarding it. On those hot paths the error is a [`DeferredDiagnostic`]
+/// (`Copy`, no allocation, no drop); it is materialized only if it survives to the parse
+/// boundary. Non-speculative error paths pass an already-built [`OxcDiagnostic`].
+#[derive(Debug, Clone)]
+pub enum FatalErrorPayload {
+    Deferred(DeferredDiagnostic),
+    Built(OxcDiagnostic),
+}
+
+impl From<DeferredDiagnostic> for FatalErrorPayload {
+    fn from(deferred: DeferredDiagnostic) -> Self {
+        Self::Deferred(deferred)
+    }
+}
+
+impl From<OxcDiagnostic> for FatalErrorPayload {
+    fn from(diagnostic: OxcDiagnostic) -> Self {
+        Self::Built(diagnostic)
+    }
+}
+
+impl FatalError {
+    /// Build the [`OxcDiagnostic`] for this fatal error.
+    pub fn into_diagnostic(self) -> OxcDiagnostic {
+        match self.error {
+            FatalErrorPayload::Deferred(deferred) => deferred.into_diagnostic(),
+            FatalErrorPayload::Built(diagnostic) => diagnostic,
+        }
+    }
 }
 
 impl<'a, C: Config> ParserImpl<'a, C> {
@@ -35,8 +71,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return;
         }
 
-        let error = diagnostics::unexpected_token(self.cur_token().span());
-        self.set_fatal_error(error);
+        self.set_fatal_error(diagnostics::unexpected_token(self.cur_token().span()));
     }
 
     /// Return error info at current token
@@ -76,9 +111,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.errors.len() + self.lexer.errors.len()
     }
 
-    /// Advance lexer's cursor to end of file.
+    /// Record a fatal error, deferring diagnostic construction where possible.
+    ///
+    /// Accepts either a [`DeferredDiagnostic`] (the speculative hot paths) or an already-built
+    /// [`OxcDiagnostic`] (non-speculative paths), via [`FatalErrorPayload`].
     #[cold]
-    pub(crate) fn set_fatal_error(&mut self, error: OxcDiagnostic) {
+    pub(crate) fn set_fatal_error(&mut self, error: impl Into<FatalErrorPayload>) {
+        self.set_fatal_error_payload(error.into());
+    }
+
+    /// Advance lexer's cursor to end of file and store the fatal error.
+    #[cold]
+    fn set_fatal_error_payload(&mut self, error: FatalErrorPayload) {
         if self.fatal_error.is_none() {
             self.lexer.advance_to_end();
             self.fatal_error = Some(FatalError { error, errors_len: self.errors.len() });
@@ -86,8 +130,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     #[cold]
-    pub(crate) fn fatal_error<T: Dummy<'a>>(&mut self, error: OxcDiagnostic) -> T {
-        self.set_fatal_error(error);
+    pub(crate) fn fatal_error<T: Dummy<'a>>(&mut self, error: impl Into<FatalErrorPayload>) -> T {
+        self.set_fatal_error_payload(error.into());
         Dummy::dummy(self.allocator())
     }
 
