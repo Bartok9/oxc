@@ -1,6 +1,6 @@
 checker.ts:
   file size: 2922154 # 2.92 MB
-  sys allocs: 25
+  sys allocs: 27
   sys reallocs: 10
   arena allocs: 264366
   arena reallocs: 22860
@@ -8,7 +8,7 @@ checker.ts:
 
 App.tsx:
   file size: 415342 # 415.34 kB
-  sys allocs: 27
+  sys allocs: 35
   sys reallocs: 13
   arena allocs: 44464
   arena reallocs: 3537
@@ -24,7 +24,7 @@ RadixUIAdoptionSection.jsx:
 
 pdf.mjs:
   file size: 567296 # 567.30 kB
-  sys allocs: 67
+  sys allocs: 94
   sys reallocs: 67
   arena allocs: 90583
   arena reallocs: 8153
@@ -32,7 +32,7 @@ pdf.mjs:
 
 antd.js:
   file size: 6686316 # 6.69 MB
-  sys allocs: 190
+  sys allocs: 191
   sys reallocs: 221
   arena allocs: 528577
   arena reallocs: 55355
@@ -48,7 +48,7 @@ binder.ts:
 
 kitchen-sink.tsx:
   file size: 732898 # 732.90 kB
-  sys allocs: 198
+  sys allocs: 214
   sys reallocs: 160
   arena allocs: 138059
   arena reallocs: 11905
