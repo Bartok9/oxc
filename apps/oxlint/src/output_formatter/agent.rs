@@ -4,8 +4,9 @@ use oxc_diagnostics::{
     Error, Severity,
     reporter::{DiagnosticReporter, DiagnosticResult, Info},
 };
+use rustc_hash::FxHashSet;
 
-use crate::output_formatter::InternalFormatter;
+use crate::output_formatter::{default::DefaultOutputFormatter, InternalFormatter};
 
 #[derive(Debug, Default)]
 pub struct AgentOutputFormatter;
@@ -13,6 +14,14 @@ pub struct AgentOutputFormatter;
 impl InternalFormatter for AgentOutputFormatter {
     fn get_diagnostic_reporter(&self) -> Box<dyn DiagnosticReporter> {
         Box::new(AgentReporter)
+    }
+
+    fn all_rules(&self, enabled_rules: FxHashSet<(&str, &str)>) -> Option<String> {
+        // --rules is a listing utility; delegate to the default formatter
+        // that produces human-readable markdown table output.
+        // The Agent formatter has no equivalent for rule listing, so this
+        // ensures `--rules` works even when oxlint auto-detects an agent environment.
+        DefaultOutputFormatter.all_rules(enabled_rules)
     }
 }
 
@@ -189,5 +198,22 @@ mod test {
         let result = reporter.render_error(error);
 
         assert_eq!(result.unwrap(), "config.json: error: Failed to parse configuration\n");
+    }
+
+    #[test]
+    fn agent_output_formatter_all_rules() {
+        use super::AgentOutputFormatter;
+        use crate::output_formatter::InternalFormatter;
+        use rustc_hash::FxHashSet;
+
+        let formatter = AgentOutputFormatter;
+        let result = formatter.all_rules(FxHashSet::default());
+
+        // AgentOutputFormatter delegates to DefaultOutputFormatter, which returns Some(String)
+        assert!(result.is_some());
+        let output = result.unwrap();
+        // Default formatter outputs markdown tables with section headers like "## Correctness"
+        assert!(output.contains("Correctness") || output.contains("Rule name"),
+            "Output should contain rules section header or table");
     }
 }
