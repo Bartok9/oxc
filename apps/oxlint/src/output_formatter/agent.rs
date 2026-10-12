@@ -4,11 +4,32 @@ use oxc_diagnostics::{
 };
 
 use crate::output_formatter::InternalFormatter;
+use oxc_linter::table::RuleTable;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug, Default)]
 pub struct AgentOutputFormatter;
 
 impl InternalFormatter for AgentOutputFormatter {
+    fn all_rules(&self, enabled_rules: FxHashSet<&str>) -> Option<String> {
+        let table = RuleTable::default();
+        let total = table.total;
+        let enabled_count = enabled_rules.len();
+
+        let mut output = String::new();
+        output.push_str(&format!("## Rules ({} total, {} enabled)\n", total, enabled_count));
+
+        for section in &table.sections {
+            output.push_str(&format!("## {}\n", section.category));
+            for row in &section.rows {
+                let enabled = if enabled_rules.contains(row.name) { "✅" } else { "" };
+                output.push_str(&format!("{} {} {}\n", enabled, row.plugin, row.name));
+            }
+        }
+
+        Some(output)
+    }
+
     fn get_diagnostic_reporter(&self) -> Box<dyn DiagnosticReporter> {
         Box::new(AgentReporter)
     }
